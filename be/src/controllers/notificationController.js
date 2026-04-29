@@ -5,6 +5,7 @@ import {
   deleteFromCache,
   notificationCacheKeys,
 } from '../utils/redis.js'
+import { logger, logError } from '../utils/logger.js'
 
 // Get all notifications for user (with Redis caching)
 export const getNotifications = async (req, res) => {
@@ -12,8 +13,11 @@ export const getNotifications = async (req, res) => {
     // Get userId from query parameter
     const userId = req.query.userId
 
+    logger.debug({ userId }, 'getNotifications: Received request')
+
     // Require userId
     if (!userId) {
+      logger.warn({ userId }, 'getNotifications: userId required')
       return res.status(401).json({ message: 'Unauthorized: userId required' })
     }
 
@@ -21,9 +25,11 @@ export const getNotifications = async (req, res) => {
     const cacheKey = notificationCacheKeys.byUserId(userId)
     const cached = await getFromCache(cacheKey)
     if (cached) {
-      console.log(`Cache hit for ${cacheKey}`)
+      logger.debug({ cacheKey }, 'getNotifications: Cache hit')
       return res.status(200).json(cached)
     }
+
+    logger.info({ userId }, 'getNotifications: Fetching from database')
 
     // Query notifications by userId
     const notifications = await Notification.find({ userId }).sort({
@@ -38,12 +44,14 @@ export const getNotifications = async (req, res) => {
       count: notifications.length,
     }
 
+    logger.info({ userId, count: notifications.length, unreadCount }, 'getNotifications: Fetched successfully')
+
     // Cache the response (1 hour TTL)
     await setCache(cacheKey, response, 3600)
 
     return res.status(200).json(response)
   } catch (error) {
-    console.error('Get notifications error:', error)
+    logError(error, { context: 'getNotifications', userId: req.query?.userId })
     return res.status(500).json({ message: 'Internal server error' })
   }
 }
@@ -54,11 +62,15 @@ export const markAsRead = async (req, res) => {
     const { notificationId } = req.params
     const userId = req.query.userId
 
+    logger.debug({ notificationId, userId }, 'markAsRead: Received request')
+
     if (!notificationId) {
+      logger.warn({ notificationId }, 'markAsRead: Notification ID is required')
       return res.status(400).json({ message: 'Notification ID is required' })
     }
 
     if (!userId) {
+      logger.warn({ userId }, 'markAsRead: userId required')
       return res.status(401).json({ message: 'Unauthorized: userId required' })
     }
 
@@ -66,13 +78,17 @@ export const markAsRead = async (req, res) => {
     const notification = await Notification.findById(notificationId)
 
     if (!notification) {
+      logger.warn({ notificationId }, 'markAsRead: Notification not found')
       return res.status(404).json({ message: 'Notification not found' })
     }
 
     // Check if notification belongs to user
     if (notification.userId && notification.userId.toString() !== userId) {
+      logger.warn({ notificationId, userId }, 'markAsRead: Unauthorized access attempt')
       return res.status(403).json({ message: 'Unauthorized' })
     }
+
+    logger.info({ notificationId, userId }, 'markAsRead: Marking as read')
 
     // Update notification
     const updatedNotification = await Notification.findByIdAndUpdate(
@@ -84,12 +100,14 @@ export const markAsRead = async (req, res) => {
     // Invalidate user's notification cache
     await deleteFromCache(notificationCacheKeys.byUserId(userId))
 
+    logger.info({ notificationId }, 'markAsRead: Successfully marked as read and cache invalidated')
+
     return res.status(200).json({
       message: 'Notification marked as read',
       notification: updatedNotification,
     })
   } catch (error) {
-    console.error('Mark as read error:', error)
+    logError(error, { context: 'markAsRead', notificationId: req.params?.notificationId })
     return res.status(500).json({ message: 'Internal server error' })
   }
 }
@@ -100,10 +118,15 @@ export const markAllAsRead = async (req, res) => {
     // Get userId from query parameter
     const userId = req.query.userId
 
+    logger.debug({ userId }, 'markAllAsRead: Received request')
+
     // Require userId
     if (!userId) {
+      logger.warn({ userId }, 'markAllAsRead: userId required')
       return res.status(401).json({ message: 'Unauthorized: userId required' })
     }
+
+    logger.info({ userId }, 'markAllAsRead: Marking all as read')
 
     // Update all notifications for this userId
     await Notification.updateMany({ userId }, { status: 'read' })
@@ -111,11 +134,13 @@ export const markAllAsRead = async (req, res) => {
     // Invalidate user's notification cache
     await deleteFromCache(notificationCacheKeys.byUserId(userId))
 
+    logger.info({ userId }, 'markAllAsRead: Successfully marked all as read and cache invalidated')
+
     return res.status(200).json({
       message: 'All notifications marked as read',
     })
   } catch (error) {
-    console.error('Mark all as read error:', error)
+    logError(error, { context: 'markAllAsRead', userId: req.query?.userId })
     return res.status(500).json({ message: 'Internal server error' })
   }
 }

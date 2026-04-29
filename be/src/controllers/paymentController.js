@@ -6,6 +6,7 @@ import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
 import { isValidEmail, isValidAmount, isValidCarDetails } from '../utils/validation.js'
 import { deleteFromCache, notificationCacheKeys } from '../utils/redis.js'
+import { logger, logError } from '../utils/logger.js'
 
 dotenv.config()
 
@@ -16,20 +17,26 @@ export const createPaymentIntent = async (req, res) => {
   try {
     const { email, amount, carDetails, planDetails } = req.body
 
+    logger.debug({ email, amount }, 'createPaymentIntent: Received request')
+
     if (!email || !amount || !carDetails || !planDetails) {
+      logger.warn({ email }, 'createPaymentIntent: Missing required fields')
       return res.status(400).json({ message: 'Missing required fields' })
     }
 
     // Validate input to prevent injection
     if (!isValidEmail(email)) {
+      logger.warn({ email }, 'createPaymentIntent: Invalid email format')
       return res.status(400).json({ message: 'Invalid email format' })
     }
 
     if (!isValidAmount(amount)) {
+      logger.warn({ email, amount }, 'createPaymentIntent: Invalid amount')
       return res.status(400).json({ message: 'Invalid amount' })
     }
 
     if (!isValidCarDetails(carDetails)) {
+      logger.warn({ email }, 'createPaymentIntent: Invalid car details')
       return res.status(400).json({ message: 'Invalid car details' })
     }
 
@@ -38,6 +45,8 @@ export const createPaymentIntent = async (req, res) => {
 
     // Create description for transaction
     const description = `Car Insurance Policy - ${carDetails.year} ${carDetails.make} ${carDetails.model} - ${planDetails.type}`
+
+    logger.info({ email, amount, carDetails }, 'createPaymentIntent: Creating Stripe payment intent')
 
     // Create payment intent
     const paymentIntent = await stripe.paymentIntents.create({
@@ -55,13 +64,15 @@ export const createPaymentIntent = async (req, res) => {
       },
     })
 
+    logger.info({ email, paymentIntentId: paymentIntent.id }, 'createPaymentIntent: Payment intent created successfully')
+
     return res.status(200).json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       description: description,
     })
   } catch (error) {
-    console.error('Create payment intent error:', error)
+    logError(error, { context: 'createPaymentIntent', email: req.body?.email })
     return res.status(500).json({ message: 'Internal server error' })
   }
 }
@@ -71,27 +82,36 @@ export const confirmPayment = async (req, res) => {
   try {
     const { paymentIntentId, email, carDetails, planDetails, amount } = req.body
 
+    logger.debug({ email, paymentIntentId }, 'confirmPayment: Received request')
+
     if (!paymentIntentId || !email || !carDetails || !planDetails) {
+      logger.warn({ email, paymentIntentId }, 'confirmPayment: Missing required fields')
       return res.status(400).json({ message: 'Missing required fields' })
     }
 
     // Validate input to prevent injection
     if (!isValidEmail(email)) {
+      logger.warn({ email }, 'confirmPayment: Invalid email format')
       return res.status(400).json({ message: 'Invalid email format' })
     }
 
     if (!isValidAmount(amount)) {
+      logger.warn({ email, amount }, 'confirmPayment: Invalid amount')
       return res.status(400).json({ message: 'Invalid amount' })
     }
 
     if (!isValidCarDetails(carDetails)) {
+      logger.warn({ email }, 'confirmPayment: Invalid car details')
       return res.status(400).json({ message: 'Invalid car details' })
     }
+
+    logger.info({ paymentIntentId }, 'confirmPayment: Verifying payment intent with Stripe')
 
     // Verify payment intent with Stripe
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId)
 
     if (paymentIntent.status !== 'succeeded') {
+      logger.warn({ paymentIntentId, status: paymentIntent.status }, 'confirmPayment: Payment not completed')
       return res.status(400).json({ message: 'Payment not completed' })
     }
 
@@ -109,10 +129,13 @@ export const confirmPayment = async (req, res) => {
           isVerified: false,
         })
         await user.save()
+        logger.info({ email }, 'confirmPayment: New user created')
       }
       
       userId = user._id
     }
+
+    logger.info({ email, userId, amount }, 'confirmPayment: Creating policy')
 
     // Create policy
     const policy = new Policy({
@@ -133,6 +156,8 @@ export const confirmPayment = async (req, res) => {
     })
 
     await policy.save()
+
+    logger.info({ policyId: policy._id, policyNumber: policy.policyNumber, email }, 'confirmPayment: Policy created successfully')
 
     // Create payment completed notification
     const paymentNotification = new Notification({
@@ -183,6 +208,8 @@ export const confirmPayment = async (req, res) => {
     // Clear Redis cache for user's notifications so fresh data is fetched next time
     await deleteFromCache(notificationCacheKeys.byUserId(userId))
 
+    logger.info({ policyId: policy._id, email }, 'confirmPayment: Notifications created and cache cleared')
+
     return res.status(200).json({
       message: 'Payment successful',
       policy: {
@@ -198,7 +225,7 @@ export const confirmPayment = async (req, res) => {
       },
     })
   } catch (error) {
-    console.error('Confirm payment error:', error)
+    logError(error, { context: 'confirmPayment', email: req.body?.email, paymentIntentId: req.body?.paymentIntentId })
     return res.status(500).json({ message: 'Internal server error' })
   }
 }
@@ -208,13 +235,17 @@ export const getPolicyDetails = async (req, res) => {
   try {
     const { policyId } = req.params
 
+    logger.debug({ policyId }, 'getPolicyDetails: Received request')
+
     if (!policyId) {
+      logger.warn({ policyId }, 'getPolicyDetails: Policy ID is required')
       return res.status(400).json({ message: 'Policy ID is required' })
     }
 
     const policy = await Policy.findById(policyId)
 
     if (!policy) {
+      logger.warn({ policyId }, 'getPolicyDetails: Policy not found')
       return res.status(404).json({ message: 'Policy not found' })
     }
 
@@ -225,14 +256,18 @@ export const getPolicyDetails = async (req, res) => {
     if (userId) {
       // Check if policy belongs to user
       if (policy.userId && policy.userId.toString() !== userId) {
+        logger.warn({ policyId, userId }, 'getPolicyDetails: Unauthorized access attempt')
         return res.status(403).json({ message: 'Unauthorized' })
       }
     } else if (userEmail) {
       // Fall back to email check
       if (policy.email !== userEmail) {
+        logger.warn({ policyId, email: userEmail }, 'getPolicyDetails: Unauthorized access attempt')
         return res.status(403).json({ message: 'Unauthorized' })
       }
     }
+
+    logger.info({ policyId }, 'getPolicyDetails: Policy details retrieved successfully')
 
     return res.status(200).json({
       policy: {
@@ -249,7 +284,7 @@ export const getPolicyDetails = async (req, res) => {
       },
     })
   } catch (error) {
-    console.error('Get policy details error:', error)
+    logError(error, { context: 'getPolicyDetails', policyId: req.params?.policyId })
     return res.status(500).json({ message: 'Internal server error' })
   }
 }
@@ -261,9 +296,12 @@ export const getAllPolicies = async (req, res) => {
     let userId = req.user?.userId
     let userEmail = req.user?.email
 
+    logger.debug({ userId, userEmail }, 'getAllPolicies: Received request')
+
     // If not authenticated but email provided in query, validate it
     if (!userId && req.query.email) {
       if (!isValidEmail(req.query.email)) {
+        logger.warn({ email: req.query.email }, 'getAllPolicies: Invalid email format')
         return res.status(400).json({ message: 'Invalid email format' })
       }
       userEmail = req.query.email
@@ -271,6 +309,7 @@ export const getAllPolicies = async (req, res) => {
 
     // Require at least one identifier
     if (!userId && !userEmail) {
+      logger.warn({ userId, userEmail }, 'getAllPolicies: Unauthorized - no identifier provided')
       return res.status(401).json({ message: 'Unauthorized' })
     }
 
@@ -282,9 +321,12 @@ export const getAllPolicies = async (req, res) => {
       searchCriteria.email = userEmail
     }
 
+    logger.info({ searchCriteria }, 'getAllPolicies: Fetching policies')
+
     const policies = await Policy.find(searchCriteria).sort({ createdAt: -1 })
 
     if (!policies || policies.length === 0) {
+      logger.info({ searchCriteria }, 'getAllPolicies: No policies found')
       return res.status(200).json({
         policies: [],
         message: 'No policies found',
@@ -304,12 +346,14 @@ export const getAllPolicies = async (req, res) => {
       createdAt: policy.createdAt,
     }))
 
+    logger.info({ count: formattedPolicies.length, email: userEmail }, 'getAllPolicies: Policies retrieved successfully')
+
     return res.status(200).json({
       policies: formattedPolicies,
       count: formattedPolicies.length,
     })
   } catch (error) {
-    console.error('Get all policies error:', error)
+    logError(error, { context: 'getAllPolicies', email: req.user?.email })
     return res.status(500).json({ message: 'Internal server error' })
   }
 }

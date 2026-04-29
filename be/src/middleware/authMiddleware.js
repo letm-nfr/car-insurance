@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken'
 import dotenv from 'dotenv'
+import { logger, logError } from '../utils/logger.js'
 
 dotenv.config()
 
@@ -14,16 +15,20 @@ export const authMiddleware = (req, res, next) => {
     const authHeader = req.headers.authorization
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      logger.warn({ path: req.path, method: req.method }, 'authMiddleware: Missing or invalid token')
       return res.status(401).json({ message: 'Unauthorized: Missing or invalid token' })
     }
 
     const token = authHeader.substring(7) // Remove 'Bearer ' prefix
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     
+    logger.debug({ userId: decoded.userId, email: decoded.email }, 'authMiddleware: Token verified successfully')
+    
     // Attach user info to request
     req.user = decoded
     next()
   } catch (error) {
+    logError(error, { context: 'authMiddleware', path: req.path })
     return res.status(401).json({ message: 'Unauthorized: Invalid token' })
   }
 }
@@ -40,10 +45,14 @@ export const optionalAuthMiddleware = (req, res, next) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7)
       const decoded = jwt.verify(token, process.env.JWT_SECRET)
+      logger.debug({ userId: decoded.userId }, 'optionalAuthMiddleware: Token verified')
       req.user = decoded
+    } else {
+      logger.debug({ path: req.path }, 'optionalAuthMiddleware: No token provided - continuing as unauthenticated')
     }
     next()
   } catch (error) {
+    logger.warn({ path: req.path, error: error.message }, 'optionalAuthMiddleware: Token verification failed - continuing without auth')
     // Token verification failed, but continue without user context
     // This is intentional for optional auth endpoints
     next()

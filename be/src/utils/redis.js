@@ -1,4 +1,5 @@
 import { createClient } from 'redis'
+import { logger, logError } from './logger.js'
 
 let redisClient = null
 
@@ -8,9 +9,11 @@ export const initializeRedis = async () => {
     const redisPassword = process.env.REDIS_ACCESS_KEY
 
     if (!redisUrl || !redisPassword) {
-      console.warn('⚠️  Redis credentials not configured. Caching disabled.')
+      logger.warn('initializeRedis: Redis credentials not configured. Caching disabled.')
       return null
     }
+
+    logger.info({ host: redisUrl }, 'initializeRedis: Attempting to connect to Redis')
 
     redisClient = createClient({
       socket: {
@@ -23,17 +26,18 @@ export const initializeRedis = async () => {
     })
 
     redisClient.on('error', (err) => {
-      console.error('Redis Client Error:', err)
+      logError(err, { context: 'redis-client-error' })
     })
 
     redisClient.on('connect', () => {
-      console.log('✓ Redis connected')
+      logger.info('initializeRedis: Redis connected successfully')
     })
 
     await redisClient.connect()
+    logger.info('initializeRedis: Redis client connected')
     return redisClient
   } catch (error) {
-    console.error('Redis initialization error:', error)
+    logError(error, { context: 'initializeRedis' })
     return null
   }
 }
@@ -53,9 +57,14 @@ export const getFromCache = async (key) => {
 
   try {
     const cached = await redisClient.get(key)
-    return cached ? JSON.parse(cached) : null
+    if (cached) {
+      logger.debug({ key }, 'getFromCache: Cache hit')
+      return JSON.parse(cached)
+    }
+    logger.debug({ key }, 'getFromCache: Cache miss')
+    return null
   } catch (error) {
-    console.error('Cache get error:', error)
+    logError(error, { context: 'getFromCache', key })
     return null
   }
 }
@@ -66,9 +75,10 @@ export const setCache = async (key, data, ttl = 3600) => {
 
   try {
     await redisClient.setEx(key, ttl, JSON.stringify(data))
+    logger.debug({ key, ttl }, 'setCache: Data cached successfully')
     return true
   } catch (error) {
-    console.error('Cache set error:', error)
+    logError(error, { context: 'setCache', key, ttl })
     return false
   }
 }
@@ -79,9 +89,10 @@ export const deleteFromCache = async (key) => {
 
   try {
     await redisClient.del(key)
+    logger.debug({ key }, 'deleteFromCache: Cache key deleted')
     return true
   } catch (error) {
-    console.error('Cache delete error:', error)
+    logError(error, { context: 'deleteFromCache', key })
     return false
   }
 }
@@ -94,10 +105,11 @@ export const deleteByPattern = async (pattern) => {
     const keys = await redisClient.keys(pattern)
     if (keys.length > 0) {
       await redisClient.del(keys)
+      logger.debug({ pattern, count: keys.length }, 'deleteByPattern: Cache keys deleted')
     }
     return true
   } catch (error) {
-    console.error('Cache delete pattern error:', error)
+    logError(error, { context: 'deleteByPattern', pattern })
     return false
   }
 }

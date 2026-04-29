@@ -1,4 +1,5 @@
 import rateLimit from 'express-rate-limit'
+import { logger } from '../utils/logger.js'
 
 /**
  * General API rate limiter
@@ -14,6 +15,12 @@ export const generalLimiter = rateLimit({
     // Don't rate limit health check
     return req.path === '/health'
   },
+  handler: (req, res) => {
+    logger.warn({ ip: req.ip, path: req.path }, 'generalLimiter: Rate limit exceeded')
+    res.status(429).json({
+      message: 'Too many requests from this IP, please try again later.',
+    })
+  },
 })
 
 /**
@@ -27,6 +34,12 @@ export const authLimiter = rateLimit({
   message: 'Too many OTP requests. Please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn({ ip: req.ip, path: req.path, email: req.body?.email }, 'authLimiter: Rate limit exceeded for auth endpoint')
+    res.status(429).json({
+      message: 'Too many OTP requests. Please try again later.',
+    })
+  },
 })
 
 /**
@@ -39,6 +52,12 @@ export const strictLimiter = rateLimit({
   message: 'Too many requests for this operation. Please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn({ ip: req.ip, path: req.path }, 'strictLimiter: Rate limit exceeded for sensitive operation')
+    res.status(429).json({
+      message: 'Too many requests for this operation. Please try again later.',
+    })
+  },
 })
 
 export default {

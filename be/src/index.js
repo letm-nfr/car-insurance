@@ -7,6 +7,7 @@ import helmet from 'helmet'
 import dotenv from 'dotenv'
 import { connectDB } from './utils/db.js'
 import { initializeRedis } from './utils/redis.js'
+import { logger, logRequest, logError } from './utils/logger.js'
 import { generalLimiter, authLimiter } from './middleware/rateLimitMiddleware.js'
 import { optionalAuthMiddleware } from './middleware/authMiddleware.js'
 import authRoutes from './routes/authRoutes.js'
@@ -17,6 +18,8 @@ dotenv.config()
 
 const app = express()
 const PORT = process.env.PORT || 5000
+
+logger.info({ port: PORT, env: process.env.NODE_ENV }, 'Starting application')
 
 // MUST be set BEFORE rate limiter to ensure X-Forwarded-For is trusted
 app.set('trust proxy', 1)
@@ -42,6 +45,9 @@ app.use(cors({
 
 app.use(express.json())
 
+// Request logging middleware
+app.use(logRequest)
+
 // Rate limiting - Apply general rate limiter to all routes
 app.use(generalLimiter)
 
@@ -52,14 +58,16 @@ app.use(optionalAuthMiddleware)
 const initializeServices = async () => {
   try {
     await connectDB()
+    logger.info('Database connected successfully')
   } catch (error) {
-    console.error('⚠️  Database initialization error:', error.message)
+    logError(error, { context: 'database-initialization' })
   }
 
   try {
     await initializeRedis()
+    logger.info('Redis initialized successfully')
   } catch (error) {
-    console.error('⚠️  Redis initialization error:', error.message)
+    logError(error, { context: 'redis-initialization' })
   }
 }
 
@@ -72,23 +80,25 @@ app.use('/api/notifications', notificationRoutes)
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ message: 'Server is running' })
+  logger.debug('Health check called')
+  res.status(200).json({ message: 'Server is running', timestamp: new Date().toISOString() })
 })
 
 // Error handling middleware
 app.use((err, req, res, next) => {
   // Handle CORS errors
   if (err.message === 'Not allowed by CORS') {
+    logError(err, { context: 'cors-error', path: req.path })
     return res.status(403).json({ message: 'Access denied' })
   }
   
   // Generic error handler
-  console.error('Unhandled error:', err.message)
+  logError(err, { context: 'unhandled-error', path: req.path, method: req.method })
   res.status(500).json({ message: 'Internal server error' })
 })
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
+  logger.info({ port: PORT, env: process.env.NODE_ENV }, 'Server running successfully')
 })
+
