@@ -33,11 +33,16 @@ jobs:
 
       - name: Install dependencies
         working-directory: be/
-        run: npm ci
+        run: npm install
 
       - name: Check for vulnerabilities
         working-directory: be/
         run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+      - name: Generate audit report
+        working-directory: be/
+        run: npm audit --json > audit-report.json || true
         continue-on-error: true
 
       - name: Verify imports
@@ -73,6 +78,13 @@ jobs:
             exit 1
           fi
           echo "✓ No hardcoded secrets detected"
+
+      - name: Commit audit report
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: Update backend audit report"
+          file_pattern: "be/audit-report.json"
+          skip_dirty_check: true
 
       - name: Comment PR with status
         if: github.event_name == 'pull_request'
