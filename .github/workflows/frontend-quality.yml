@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: fe/
-        run: npm ci
+        run: npm install
 
       - name: Build frontend
         working-directory: fe/
@@ -132,11 +132,16 @@ jobs:
 
       - name: Install dependencies
         working-directory: fe/
-        run: npm ci
+        run: npm install
 
       - name: Check for vulnerabilities
         working-directory: fe/
         run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+      - name: Generate audit report
+        working-directory: fe/
+        run: npm audit --json > audit-report.json || true
         continue-on-error: true
 
       - name: Lint code
@@ -158,6 +163,13 @@ jobs:
       - name: Verify build
         working-directory: fe/
         run: npm run build
+
+      - name: Commit audit reports
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: Update frontend audit & Lighthouse reports"
+          file_pattern: "fe/lighthouse-report* fe/audit-report.json"
+          skip_dirty_check: true
 
       - name: Comment PR with status
         if: github.event_name == 'pull_request'
