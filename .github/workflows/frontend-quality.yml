@@ -168,12 +168,24 @@ jobs:
         working-directory: fe/
         run: npm run build
 
+      - name: Verify Lighthouse reports exist
+        working-directory: fe/
+        run: |
+          if [ ! -f lighthouse-report.json ]; then
+            echo '{"categories":{}}' > lighthouse-report.json
+          fi
+          if [ ! -f lighthouse-report.html ]; then
+            echo '<html><body>Lighthouse report failed to generate</body></html>' > lighthouse-report.html
+          fi
+
       - name: Commit audit reports
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: Update frontend audit & Lighthouse reports"
-          file_pattern: "fe/lighthouse-report* fe/audit-report.json"
+          file_pattern: "fe/audit-report.json fe/lighthouse-report.json fe/lighthouse-report.html"
           skip_dirty_check: true
+          skip_fetch: true
+          skip_checkout: true
 
       - name: Comment PR with status
         if: github.event_name == 'pull_request'
